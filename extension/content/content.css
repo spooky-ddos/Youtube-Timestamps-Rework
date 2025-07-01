@@ -2,8 +2,6 @@
     pointer-events: none;
 }
 
-
-
 .__youtube-timestamps__bar {
     width: 100%;
     height: 100%;
@@ -17,9 +15,25 @@
     min-width: 3px;
     max-width: 5px;
     width: 0.5%;
-    position: fixed;
+    position: absolute;
     background-color: white;
+    transition: background-color 0.3s ease;
 }
+
+/* Gorące momenty - gradient od niebieskiego do czerwonego */
+.__youtube-timestamps__stamp.stamp-heat-1 {
+    background-color: #5DADE2; /* Spokojny niebieski */
+}
+.__youtube-timestamps__stamp.stamp-heat-2 {
+    background-color: #F4D03F; /* Ciepły żółty */
+}
+.__youtube-timestamps__stamp.stamp-heat-3 {
+    background-color: #E67E22; /* Intensywny pomarańczowy */
+}
+.__youtube-timestamps__stamp.stamp-heat-4 {
+    background-color: #C0392B; /* Gorący czerwony */
+}
+
 
 .__youtube-timestamps__preview-wrapper {
     position: relative;
@@ -46,23 +60,19 @@
 }
 
 .__youtube-timestamps__preview__name {
-    /* From YT */
     color: #030303;
-    font-size: 13px;/* was 1.3rem */
+    font-size: 13px;
     font-weight: 500;
-    line-height: 18px;/* was 1.8rem */
-
+    line-height: 18px;
     margin-left: 8px;
 }
 
 .__youtube-timestamps__preview__text {
-    /* From YT */
     color: #030303;
-    font-size: 14px;/* was 1.4rem */
+    font-size: 14px;
     font-weight: 400;
     letter-spacing: normal;
-    line-height: 20px;/* was 2rem */
-
+    line-height: 20px;
     margin-top: 8px;
     white-space: pre-line;
 }
@@ -80,10 +90,7 @@
         background-color: #181818;
     }
 
-    .__youtube-timestamps__preview__name {
-        color: white;
-    }
-
+    .__youtube-timestamps__preview__name,
     .__youtube-timestamps__preview__text {
         color: white;
     }
@@ -95,13 +102,14 @@
 
 .__youtube-timestamps__popup-container {
     position: absolute;
-    top: 20px;
-    left: 20px;
+    bottom: 80px; /* Pozycja nad paskiem postępu */
+    right: 20px;
     z-index: 2147483647;
     display: flex;
-    flex-direction: column;
+    flex-direction: column-reverse; /* Nowe popupy pojawiają się na dole */
     gap: 10px;
     pointer-events: none;
+    width: 320px;
 }
 
 .__youtube-timestamps__time-popup {
@@ -109,19 +117,19 @@
     color: white;
     padding: 12px;
     border-radius: 8px;
-    max-width: 300px;
-    max-height: 150px;
-    overflow: hidden;
-    opacity: 1;
-    transition: opacity 0.5s ease, transform 0.5s ease;
-    transform: translateX(0);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    max-width: 320px;
+    opacity: 0; /* Start jako niewidoczny */
+    transform: translateX(100%); /* Start poza ekranem */
+    transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94); /* Płynna animacja */
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    pointer-events: auto;
 }
 
-.__youtube-timestamps__time-popup--fade-out {
-    opacity: 0;
-    transform: translateX(20px);
+.__youtube-timestamps__time-popup.popup-visible {
+    opacity: 1;
+    transform: translateX(0);
 }
+
 
 .__youtube-timestamps__popup-author {
     display: flex;
@@ -148,19 +156,17 @@
     text-overflow: ellipsis;
     display: -webkit-box;
     -webkit-line-clamp: 4;
+    line-clamp: 4;
     -webkit-box-orient: vertical;
 }
 
 @media (prefers-color-scheme: dark) {
     .__youtube-timestamps__time-popup {
-        background-color: rgba(255, 255, 255, 0.1);
+        background-color: rgba(40, 40, 40, 0.95);
     }
 }
 
-.ytp-fullscreen .__youtube-timestamps__popup-container {
-    top: 60px;
-}
-
+.ytp-fullscreen .__youtube-timestamps__popup-container,
 .ytd-watch-flexy[theater] .__youtube-timestamps__popup-container {
-    top: 40px;
+    bottom: 90px;
 }
