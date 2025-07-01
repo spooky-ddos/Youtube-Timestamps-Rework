@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            width: 280px;
+            padding: 20px;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+        }
+
+        .header img {
+            width: 32px;
+            height: 32px;
+            margin-right: 12px;
+        }
+
+        .header-text {
+            flex-grow: 1;
+        }
+
+        .header-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+            color: #333;
+        }
+
+        .header-version {
+            font-size: 12px;
+            color: #666;
+            margin-top: 2px;
+        }
+
+        .switch-container {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+            padding: 8px;
+            border-radius: 8px;
+            transition: background-color 0.2s;
+        }
+
+        .switch-container:hover {
+            background-color: rgba(0, 0, 0, 0.03);
+        }
+
+        .switch-label {
+            font-size: 14px;
+            color: #333;
+            display: flex;
+            align-items: center;
+        }
+
+        .switch-label-icon {
+            width: 18px;
+            height: 18px;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 22px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .3s;
+            border-radius: 22px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 2px;
+            bottom: 2px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        input:checked + .slider {
+            background-color: #4285f4;
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+
+        .footer {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #292a2d;
+            }
+            .header {
+                border-bottom-color: rgba(255, 255, 255, 0.1);
+            }
+            .header-title {
+                color: #fff;
+            }
+            .header-version {
+                color: #999;
+            }
+            .switch-label {
+                color: #fff;
+            }
+            .switch-container:hover {
+                background-color: rgba(255, 255, 255, 0.05);
+            }
+            .footer {
+                border-top-color: rgba(255, 255, 255, 0.1);
+                color: #999;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <img src="../icons/icon48.png" alt="YouTube Timestamps">
+        <div class="header-text">
+            <h1 class="header-title">YouTube Timestamps</h1>
+            <div class="header-version">v1.0.1</div>
+        </div>
+    </div>
+
+    <div class="switch-container">
+        <span class="switch-label">
+            <img class="switch-label-icon" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTExLjk5OSAyQzYuNDcgMiAyIDYuNDggMiAxMmMwIDUuNTIgNC40NyAxMCA5Ljk5OSAxMEMxNy41MiAyMiAyMiAxNy41MiAyMiAxMmMwLTUuNTItNC40NDktMTAtMTAuMDAxLTEwem0zLjQyNSAxNS4zNDVsLTMuNDI1LTEuOTQ0LTMuNDI1IDEuOTQ0Ljg1NC0zLjY1LTIuODQxLTIuNTcgMy43MjUtLjMyIDEuNjg3LTMuNTIgMS42ODcgMy41MiAzLjcyNS4zMi0yLjg0MSAyLjU3LjgyOCAzLjY1eiIgZmlsbD0iY3VycmVudENvbG9yIi8+PC9zdmc+" alt="Timeline Markers">
+            Znaczniki na pasku czasu
+        </span>
+        <label class="switch">
+            <input type="checkbox" id="timelineMarkers" checked>
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="switch-container">
+        <span class="switch-label">
+            <img class="switch-label-icon" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTIwIDJINGMtMS4xIDAtMS45OS45LTEuOTkgMkwyIDE2YzAgMS4xLjkgMiAyIDJoMTZjMS4xIDAgMi0uOSAyLTJWNGMwLTEuMS0uOS0yLTItMnptLTIgMTJINnYtMmgxMnYyem0wLTRINlY4aDEydjJ6IiBmaWxsPSJjdXJyZW50Q29sb3IiLz48L3N2Zz4=" alt="Comment Popups">
+            Powiadomienia o komentarzach
+        </span>
+        <label class="switch">
+            <input type="checkbox" id="commentPopups" checked>
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <div class="footer">
+        Made with ❤️ for YouTube community
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html> 
