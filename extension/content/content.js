@@ -1,44 +1,23 @@
+// --- ZMIENNE GLOBALNE I USTAWIENIA ---
 let initialized = false;
 let isProcessing = false;
 let currentVideoId = null;
-let contextMenuTimeComment = null; // Dodana zmienna do przechowywania danych menu kontekstowego
-
+let contextMenuTimeComment = null;
+let commentsCache = {};
 let settings = {
     timelineMarkers: true,
     commentPopups: true
 };
 
+// --- GŁÓWNA LOGIKA INICJALIZACJI ---
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === 'settingsChanged') {
         settings = { ...settings, ...message.settings };
-        updateFeatures();
+        cleanupAndReset(false);
+        main();
     }
 });
-
-function updateFeatures() {
-    const bar = document.querySelector('.__youtube-timestamps__bar');
-    if (bar) {
-        bar.style.display = settings.timelineMarkers ? '' : 'none';
-    }
-
-    if (window.__youtube_timestamps_cleanup) {
-        window.__youtube_timestamps_cleanup();
-        window.__youtube_timestamps_cleanup = null;
-    }
-
-    if (settings.commentPopups) {
-        const videoId = getVideoId();
-        if (videoId) {
-            fetchTimeComments(videoId)
-                .then(timeComments => {
-                    if (videoId === getVideoId()) {
-                        const cleanup = manageTimePopups(timeComments);
-                        window.__youtube_timestamps_cleanup = cleanup;
-                    }
-                });
-        }
-    }
-}
 
 chrome.storage.sync.get({
     timelineMarkers: true,
@@ -51,20 +30,154 @@ chrome.storage.sync.get({
     }
 });
 
-const PREVIEW_BORDER_SIZE = 2;
-const PREVIEW_MARGIN = 8;
-const BASE_POPUP_DISPLAY_TIME = 5000; // Bazowy czas wyświetlania w ms
-const POPUP_CHECK_INTERVAL = 500;    // Zmniejszona częstotliwość sprawdzania
-const MAX_VISIBLE_POPUPS = 5;
-let popupQueue = [];
-
-main();
-
 onLocationHrefChange(() => {
-    removeBar();
-    removeContextMenu();
+    log('Wykryto zmianę URL, resetowanie rozszerzenia...');
+    cleanupAndReset(true);
     main();
 });
+
+// --- GŁÓWNE FUNKCJE STERUJĄCE ---
+
+function main() {
+    if (isProcessing) {
+        log('Już przetwarzam, pomijam.');
+        return;
+    }
+    const videoId = getVideoId();
+    if (!videoId || videoId === currentVideoId) {
+        log('Strona nie jest filmem lub jest to ten sam film, pomijam.');
+        return;
+    }
+    isProcessing = true;
+    currentVideoId = videoId;
+    log(`Przetwarzanie wideo: ${videoId}`);
+
+    if (commentsCache[videoId]) {
+        log("Znaleziono komentarze w pamięci podręcznej.");
+        addTimeComments(commentsCache[videoId]);
+        isProcessing = false;
+    } else {
+        log("Pobieranie komentarzy z sieci...");
+        fetchTimeComments(videoId)
+            .then(timeComments => {
+                if (videoId !== getVideoId()) {
+                    isProcessing = false;
+                    return;
+                }
+                commentsCache[videoId] = timeComments;
+                log("Komentarze zapisane w pamięci podręcznej.");
+                addTimeComments(timeComments);
+                isProcessing = false;
+            })
+            .catch(error => {
+                log(`Błąd w głównym procesie: ${error}`);
+                isProcessing = false;
+            });
+    }
+}
+
+function cleanupAndReset(fullReset = false) {
+    log(`Czyszczenie stanu... (Pełny reset: ${fullReset})`);
+    document.querySelector('.__youtube-timestamps__bar')?.remove();
+    document.querySelector('.__youtube-timestamps__popup-container')?.remove();
+    popupQueue = [];
+    if (typeof window.__youtube_timestamps_cleanup === 'function') {
+        window.__youtube_timestamps_cleanup();
+    }
+    window.__youtube_timestamps_cleanup = null;
+    currentVideoId = null;
+    isProcessing = false;
+    if (fullReset) {
+        commentsCache = {};
+        log("Pamięć podręczna komentarzy wyczyszczona.");
+    }
+}
+
+// --- FUNKCJE DODAJĄCE ELEMENTY NA STRONIE ---
+
+function addTimeComments(timeComments) {
+    if (!timeComments || timeComments.length === 0) {
+        log('Brak komentarzy z czasem do przetworzenia.');
+        return;
+    }
+    log(`Przetwarzanie ${timeComments.length} komentarzy.`);
+    const timeCounts = {};
+    timeComments.forEach(tc => {
+        timeCounts[tc.time] = (timeCounts[tc.time] || 0) + 1;
+    });
+    const maxCount = Math.max(...Object.values(timeCounts));
+
+    function getHeatLevel(time) {
+        const count = timeCounts[time];
+        if (maxCount <= 1) return 'stamp-heat-1';
+        const heatRatio = count / maxCount;
+        if (heatRatio > 0.75) return 'stamp-heat-4';
+        if (heatRatio > 0.5) return 'stamp-heat-3';
+        if (heatRatio > 0.25) return 'stamp-heat-2';
+        return 'stamp-heat-1';
+    }
+
+    if (settings.timelineMarkers) {
+        const bar = getOrCreateBar();
+        const video = getVideo();
+        if (!video || isNaN(video.duration)) {
+            log('Nie znaleziono elementu wideo lub jego długości.');
+            return;
+        }
+        const videoDuration = video.duration;
+
+        for (const tc of timeComments) {
+            if (tc.time > videoDuration) continue;
+            const stamp = document.createElement('div');
+            stamp.classList.add('__youtube-timestamps__stamp', getHeatLevel(tc.time));
+            stamp.style.left = `calc(${(tc.time / videoDuration) * 100}% - 2px)`;
+            bar.appendChild(stamp);
+            
+            stamp.addEventListener('mouseenter', () => showPreview(tc));
+            stamp.addEventListener('mouseleave', () => hidePreview());
+            
+            stamp.addEventListener('wheel', withWheelThrottle((e) => {
+                const preview = getOrCreatePreview();
+                if (preview) {
+                    preview.scrollBy(0, e.deltaY);
+                }
+            }));
+            stamp.addEventListener('contextmenu', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (tc === contextMenuTimeComment && isContextMenuVisible()) {
+                    hideContextMenu();
+                } else {
+                    showContextMenu(tc, e.pageX, e.pageY);
+                    contextMenuTimeComment = tc;
+                }
+            });
+        }
+        log(`Dodano ${timeComments.length} znaczników na osi czasu.`);
+    }
+
+    if (settings.commentPopups) {
+        const cleanupFunc = manageTimePopups(timeComments);
+        window.__youtube_timestamps_cleanup = cleanupFunc;
+        log('Manager popupów zainicjalizowany.');
+    }
+}
+
+function getOrCreateBar() {
+    let bar = document.querySelector('.__youtube-timestamps__bar');
+    if (!bar) {
+        // Używamy oryginalnego, podwójnego selektora
+        let container = document.querySelector('#movie_player .ytp-timed-markers-container, #movie_player .ytp-progress-list');
+        bar = document.createElement('div');
+        bar.classList.add('__youtube-timestamps__bar');
+        if (container) {
+            container.appendChild(bar);
+        }
+    }
+    return bar;
+}
+
+// --- POZOSTAŁE FUNKCJE POMOCNICZE ---
 
 document.addEventListener('click', e => {
     const stamp = e.target.closest('.__youtube-timestamps__stamp');
@@ -80,185 +193,50 @@ document.addEventListener('contextmenu', e => {
     }
 }, true);
 
-function log(message) {
-    console.log(`[YTT] ${message}`);
-}
-
-function main() {
-    if (isProcessing) {
-        log('Już przetwarzam, pomijam');
-        return;
-    }
-
-    const videoId = getVideoId();
-    if (!videoId) {
-        log('Nie znaleziono ID wideo');
-        return;
-    }
-
-    if (videoId === currentVideoId) {
-        log('To samo ID wideo, pomijam');
-        return;
-    }
-
-    isProcessing = true;
-    currentVideoId = videoId;
-
-    log(`Przetwarzanie wideo: ${videoId}`);
-
-    removeBar();
-    if (typeof window.__youtube_timestamps_cleanup === 'function') {
-        window.__youtube_timestamps_cleanup();
-        window.__youtube_timestamps_cleanup = null;
-    }
-
-    fetchTimeComments(videoId)
-        .then(timeComments => {
-            if (videoId !== getVideoId()) {
-                log('ID wideo zmieniło się, przerywam');
-                isProcessing = false;
-                return;
-            }
-            addTimeComments(timeComments);
-            isProcessing = false;
-        })
-        .catch(error => {
-            log(`Błąd w głównym procesie: ${error}`);
-            isProcessing = false;
+function fetchTimeComments(videoId) {
+    return new Promise((resolve) => {
+        chrome.runtime.sendMessage({
+            type: 'fetchTimeComments',
+            videoId
+        }, (response) => {
+            resolve(response || []);
         });
+    });
 }
 
 function getVideoId() {
-    if (window.location.pathname === '/watch') {
-        return parseParams(window.location.href)['v'];
-    } else if (window.location.pathname.startsWith('/embed/')) {
-        return window.location.pathname.substring('/embed/'.length);
-    } else {
-        return null;
-    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get('v');
 }
 
 function getVideo() {
     return document.querySelector('#movie_player video');
 }
 
-function fetchTimeComments(videoId) {
-    log(`Pobieranie komentarzy dla wideo: ${videoId}`);
-    return new Promise((resolve) => {
-        chrome.runtime.sendMessage({ type: 'fetchTimeComments', videoId }, (response) => {
-            log(`Otrzymano ${response?.length || 0} komentarzy z czasem`);
-            resolve(response || []);
-        });
+function log(message) {
+    console.log(`[YTT] ${message}`);
+}
+
+function onLocationHrefChange(callback) {
+    let currentHref = location.href;
+    const observer = new MutationObserver(() => {
+        if (currentHref !== location.href) {
+            currentHref = location.href;
+            callback();
+        }
+    });
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
     });
 }
 
-function addTimeComments(timeComments) {
-    if (!timeComments || timeComments.length === 0) {
-        log('Brak komentarzy z czasem do przetworzenia');
-        return;
-    }
-
-    log(`Przetwarzanie ${timeComments.length} komentarzy`);
-
-    if (typeof window.__youtube_timestamps_cleanup === 'function') {
-        window.__youtube_timestamps_cleanup();
-        window.__youtube_timestamps_cleanup = null;
-    }
-
-    // "Gorące momenty" - logika
-    const timeCounts = {};
-    timeComments.forEach(tc => {
-        timeCounts[tc.time] = (timeCounts[tc.time] || 0) + 1;
-    });
-    const maxCount = Math.max(...Object.values(timeCounts));
-
-    function getHeatLevel(time) {
-        const count = timeCounts[time];
-        if (maxCount <= 1) return 'stamp-heat-1'; // Domyślny
-        const heatRatio = count / maxCount;
-        if (heatRatio > 0.75) return 'stamp-heat-4'; // Gorący
-        if (heatRatio > 0.5) return 'stamp-heat-3';  // Ciepły
-        if (heatRatio > 0.25) return 'stamp-heat-2';  // Lekko ciepły
-        return 'stamp-heat-1'; // Chłodny
-    }
-
-    if (settings.timelineMarkers) {
-        const bar = getOrCreateBar();
-        const video = getVideo();
-        if (!video) {
-            log('Nie znaleziono elementu wideo');
-            return;
-        }
-        const videoDuration = video.duration;
-        log(`Długość wideo: ${videoDuration}`);
-
-        let addedMarkers = 0;
-
-        for (const tc of timeComments) {
-            if (tc.time > videoDuration) continue;
-            const stamp = document.createElement('div');
-            stamp.classList.add('__youtube-timestamps__stamp', getHeatLevel(tc.time));
-            const offset = tc.time / videoDuration * 100;
-            stamp.style.left = `calc(${offset}% - 2px)`;
-            bar.appendChild(stamp);
-            
-            stamp.addEventListener('mouseenter', () => showPreview(tc));
-            stamp.addEventListener('mouseleave', () => hidePreview());
-            stamp.addEventListener('wheel', withWheelThrottle((deltaY) => {
-                const preview = getOrCreatePreview();
-                if (preview) {
-                    preview.scrollBy(0, deltaY);
-                }
-            }));
-            stamp.addEventListener('contextmenu', e => {
-                e.preventDefault();
-                e.stopPropagation();
-                if (tc === contextMenuTimeComment && isContextMenuVisible()) {
-                    hideContextMenu();
-                } else {
-                    showContextMenu(tc, e.pageX, e.pageY);
-                    contextMenuTimeComment = tc;
-                }
-            });
-            addedMarkers++;
-        }
-
-        log(`Dodano ${addedMarkers} znaczników na osi czasu`);
-    }
-
-    if (settings.commentPopups) {
-        const cleanup = manageTimePopups(timeComments);
-        if (cleanup) {
-            window.__youtube_timestamps_cleanup = cleanup;
-            log('Manager popupów zainicjalizowany');
-        }
-    }
-}
-
-function getOrCreateBar() {
-    let bar = document.querySelector('.__youtube-timestamps__bar');
-    if (!bar) {
-        let container = document.querySelector('#movie_player .ytp-timed-markers-container');
-        if (!container) {
-            container = document.querySelector('#movie_player .ytp-progress-list');
-        }
-        bar = document.createElement('div');
-        bar.classList.add('__youtube-timestamps__bar');
-        container.appendChild(bar);
-    }
-    return bar;
-}
-
-function removeBar() {
-    const bar = document.querySelector('.__youtube-timestamps__bar');
-    if (bar) {
-        bar.remove();
-    }
-    if (window.__youtube_timestamps_cleanup) {
-        window.__youtube_timestamps_cleanup();
-        window.__youtube_timestamps_cleanup = null;
-    }
-}
+const PREVIEW_BORDER_SIZE = 2;
+const PREVIEW_MARGIN = 8;
+const BASE_POPUP_DISPLAY_TIME = 5000;
+const POPUP_CHECK_INTERVAL = 500;
+const MAX_VISIBLE_POPUPS = 5;
+let popupQueue = [];
 
 function getTooltip() {
     return document.querySelector('#movie_player .ytp-tooltip');
@@ -266,6 +244,9 @@ function getTooltip() {
 
 function showPreview(timeComment) {
     const tooltip = getTooltip();
+    if (!tooltip) {
+        return;
+    }
     const preview = getOrCreatePreview();
     preview.style.display = '';
     preview.querySelector('.__youtube-timestamps__preview__avatar').src = timeComment.authorAvatar;
@@ -276,7 +257,7 @@ function showPreview(timeComment) {
 
     const tooltipBgWidth = tooltip.querySelector('.ytp-tooltip-bg').style.width;
     const previewWidth = tooltipBgWidth.endsWith('px') ? parseFloat(tooltipBgWidth) : 160;
-    preview.style.width = (previewWidth + 2 * PREVIEW_BORDER_SIZE) + 'px';
+    preview.style.width = `${previewWidth + 2 * PREVIEW_BORDER_SIZE}px`;
 
     const halfPreviewWidth = previewWidth / 2;
     const playerRect = document.querySelector('#movie_player .ytp-progress-bar').getBoundingClientRect();
@@ -284,6 +265,7 @@ function showPreview(timeComment) {
     const minPivot = playerRect.left + halfPreviewWidth;
     const maxPivot = playerRect.right - halfPreviewWidth;
     let previewLeft;
+
     if (pivot < minPivot) {
         previewLeft = playerRect.left - pivot;
     } else if (pivot > maxPivot) {
@@ -291,11 +273,11 @@ function showPreview(timeComment) {
     } else {
         previewLeft = -halfPreviewWidth;
     }
-    preview.style.left = (previewLeft - PREVIEW_BORDER_SIZE) + 'px';
+    preview.style.left = `${previewLeft - PREVIEW_BORDER_SIZE}px`;
 
     const textAboveVideoPreview = tooltip.querySelector('.ytp-tooltip-edu');
     if (textAboveVideoPreview) {
-        preview.style.bottom = (10 + textAboveVideoPreview.clientHeight) + 'px';
+        preview.style.bottom = `${10 + textAboveVideoPreview.clientHeight}px`;
     }
 
     const tooltipTop = tooltip.style.top;
@@ -305,61 +287,61 @@ function showPreview(timeComment) {
             previewHeight -= textAboveVideoPreview.clientHeight;
         }
         if (previewHeight > 0) {
-            preview.style.maxHeight = previewHeight + 'px';
+            preview.style.maxHeight = `${previewHeight}px`;
         }
     }
 
     const highlightedTextFragment = preview.querySelector('.__youtube-timestamps__preview__text-stamp');
     if (highlightedTextFragment) {
-        highlightedTextFragment.scrollIntoView({ block: 'nearest' });
+        highlightedTextFragment.scrollIntoView({
+            block: 'nearest'
+        });
     }
 }
 
 function getOrCreatePreview() {
     const tooltip = getTooltip();
-    let preview = tooltip.querySelector('.__youtube-timestamps__preview');
-    if (!preview) {
+    let preview = tooltip?.querySelector('.__youtube-timestamps__preview');
+    if (!preview && tooltip) {
         preview = document.createElement('div');
         preview.classList.add('__youtube-timestamps__preview');
-        const previewWrapper = document.createElement('div');
-        previewWrapper.classList.add('__youtube-timestamps__preview-wrapper');
-        previewWrapper.appendChild(preview);
-        tooltip.insertAdjacentElement('afterbegin', previewWrapper);
+        const wrapper = document.createElement('div');
+        wrapper.classList.add('__youtube-timestamps__preview-wrapper');
+        wrapper.appendChild(preview);
+        tooltip.insertAdjacentElement('afterbegin', wrapper);
 
-        const authorElement = document.createElement('div');
-        authorElement.classList.add('__youtube-timestamps__preview__author');
-        preview.appendChild(authorElement);
+        const author = document.createElement('div');
+        author.classList.add('__youtube-timestamps__preview__author');
+        preview.appendChild(author);
 
-        const avatarElement = document.createElement('img');
-        avatarElement.classList.add('__youtube-timestamps__preview__avatar');
-        authorElement.appendChild(avatarElement);
+        const avatar = document.createElement('img');
+        avatar.classList.add('__youtube-timestamps__preview__avatar');
+        author.appendChild(avatar);
 
-        const nameElement = document.createElement('span');
-        nameElement.classList.add('__youtube-timestamps__preview__name');
-        authorElement.appendChild(nameElement);
+        const name = document.createElement('span');
+        name.classList.add('__youtube-timestamps__preview__name');
+        author.appendChild(name);
 
-        const textElement = document.createElement('div');
-        textElement.classList.add('__youtube-timestamps__preview__text');
-        preview.appendChild(textElement);
+        const text = document.createElement('div');
+        text.classList.add('__youtube-timestamps__preview__text');
+        preview.appendChild(text);
     }
     return preview;
 }
 
 function highlightTextFragment(text, fragment) {
     const result = document.createDocumentFragment();
-    const parts = text.split(fragment);
-    for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
+    text.split(fragment).forEach((part, i, arr) => {
         if (part) {
             result.appendChild(document.createTextNode(part));
         }
-        if (i < parts.length - 1) {
-            const fragmentNode = document.createElement('span');
-            fragmentNode.classList.add('__youtube-timestamps__preview__text-stamp');
-            fragmentNode.textContent = fragment;
-            result.appendChild(fragmentNode);
+        if (i < arr.length - 1) {
+            const span = document.createElement('span');
+            span.classList.add('__youtube-timestamps__preview__text-stamp');
+            span.textContent = fragment;
+            result.appendChild(span);
         }
-    }
+    });
     return result;
 }
 
@@ -370,107 +352,62 @@ function hidePreview() {
     }
 }
 
-function parseParams(href) {
-    const noHash = href.split('#')[0];
-    const paramString = noHash.split('?')[1];
-    const params = {};
-    if (paramString) {
-        const paramsArray = paramString.split('&');
-        for (const kv of paramsArray) {
-            const tmparr = kv.split('=');
-            params[tmparr[0]] = tmparr[1];
-        }
-    }
-    return params;
-}
-
 function withWheelThrottle(callback) {
-    let deltaYAcc = 0;
-    let afRequested = false;
+    let afReq = false;
     return (e) => {
         e.preventDefault();
-        deltaYAcc += e.deltaY;
-        if (afRequested) {
-            return;
-        }
-        afRequested = true;
-        window.requestAnimationFrame(() => {
-            callback(deltaYAcc);
-            deltaYAcc = 0;
-            afRequested = false;
+        if (afReq) return;
+        afReq = true;
+        requestAnimationFrame(() => {
+            callback(e);
+            afReq = false;
         });
     }
 }
 
-function onLocationHrefChange(callback) {
-    let currentHref = document.location.href;
-    const observer = new MutationObserver(() => {
-        if (currentHref !== document.location.href) {
-            currentHref = document.location.href;
-            callback();
-        }
-    });
-    observer.observe(document.querySelector("body"), { childList: true, subtree: true });
+function showContextMenu(tc, x, y) {
+    const menu = getOrCreateContextMenu();
+    menu.style.display = '';
+    adjustContextMenu(menu, x, y);
+    menu.dataset.commentId = tc.commentId;
 }
 
-function showContextMenu(timeComment, x, y) {
-    const contextMenu = getOrCreateContextMenu();
-    contextMenu.style.display = '';
-    adjustContextMenuSizeAndPosition(contextMenu, x, y);
-    fillContextMenuData(contextMenu, timeComment);
-}
-
-function fillContextMenuData(contextMenu, timeComment) {
-    contextMenu.dataset.commentId = timeComment.commentId;
-}
-
-function adjustContextMenuSizeAndPosition(contextMenu, x, y) {
-    const menuHeight = contextMenu.querySelector('.ytp-panel-menu').clientHeight;
-    contextMenu.style.height = menuHeight + 'px';
-    contextMenu.style.top = (y - menuHeight) + 'px';
-    contextMenu.style.left = x + 'px';
+function adjustContextMenu(menu, x, y) {
+    const height = menu.querySelector('.ytp-panel-menu').clientHeight;
+    menu.style.height = `${height}px`;
+    menu.style.top = `${y - height}px`;
+    menu.style.left = `${x}px`;
 }
 
 function getOrCreateContextMenu() {
-    let contextMenu = getContextMenu();
-    if (!contextMenu) {
-        contextMenu = document.createElement('div');
-        contextMenu.id = '__youtube-timestamps__context-menu';
-        contextMenu.classList.add('ytp-popup');
-        document.body.appendChild(contextMenu);
-
-        const panelElement = document.createElement('div');
-        panelElement.classList.add('ytp-panel');
-        contextMenu.appendChild(panelElement);
-
-        const menuElement = document.createElement('div');
-        menuElement.classList.add('ytp-panel-menu');
-        panelElement.appendChild(menuElement);
-
-        menuElement.appendChild(menuItemElement("Open in New Tab", () => {
-            const videoId = getVideoId();
-            const commentId = contextMenu.dataset.commentId;
-            window.open(`https://www.youtube.com/watch?v=${videoId}&lc=${commentId}`, '_blank');
+    let menu = document.querySelector('#__youtube-timestamps__context-menu');
+    if (!menu) {
+        menu = document.createElement('div');
+        menu.id = '__youtube-timestamps__context-menu';
+        menu.classList.add('ytp-popup');
+        const panel = document.createElement('div');
+        panel.classList.add('ytp-panel');
+        menu.appendChild(panel);
+        const menuContent = document.createElement('div');
+        menuContent.classList.add('ytp-panel-menu');
+        panel.appendChild(menuContent);
+        menuContent.appendChild(menuItem("Open in New Tab", () => {
+            window.open(`https://www.youtube.com/watch?v=${getVideoId()}&lc=${menu.dataset.commentId}`, '_blank');
         }));
+        document.body.appendChild(menu);
     }
-    return contextMenu;
+    return menu;
 }
 
-function menuItemElement(label, callback) {
-    const itemElement = document.createElement('div');
-    itemElement.classList.add('ytp-menuitem');
-    itemElement.addEventListener('click', callback);
-
-    const iconElement = document.createElement('div');
-    iconElement.classList.add('ytp-menuitem-icon');
-    itemElement.appendChild(iconElement);
-
-    const labelElement = document.createElement('div');
-    labelElement.classList.add('ytp-menuitem-label');
-    labelElement.textContent = label;
-    itemElement.appendChild(labelElement);
-
-    return itemElement;
+function menuItem(label, action) {
+    const item = document.createElement('div');
+    item.classList.add('ytp-menuitem');
+    item.addEventListener('click', action);
+    const labelEl = document.createElement('div');
+    labelEl.classList.add('ytp-menuitem-label');
+    labelEl.textContent = label;
+    item.appendChild(labelEl);
+    return item;
 }
 
 function getContextMenu() {
@@ -478,184 +415,130 @@ function getContextMenu() {
 }
 
 function isContextMenuVisible() {
-    const contextMenu = getContextMenu();
-    return contextMenu && !contextMenu.style.display;
+    const menu = getContextMenu();
+    return menu && !menu.style.display;
 }
 
 function hideContextMenu() {
-    const contextMenu = getContextMenu();
-    if (contextMenu) {
-        contextMenu.style.display = 'none';
-    }
+    getContextMenu()?.style.setProperty('display', 'none');
 }
 
 function removeContextMenu() {
-    const contextMenu = getContextMenu();
-    if (contextMenu) {
-        contextMenu.remove();
-    }
+    getContextMenu()?.remove();
 }
 
 function getOrCreatePopupContainer() {
-    let container = document.querySelector('.__youtube-timestamps__popup-container');
-    if (!container) {
-        const playerContainer = document.querySelector('#movie_player');
-        if (!playerContainer) {
-            log('Nie znaleziono kontenera odtwarzacza');
-            return null;
-        }
-        container = document.createElement('div');
-        container.classList.add('__youtube-timestamps__popup-container');
-        playerContainer.appendChild(container);
-        log('Utworzono nowy kontener popupów');
+    let cont = document.querySelector('.__youtube-timestamps__popup-container');
+    if (!cont) {
+        const player = document.querySelector('#movie_player');
+        if (!player) return null;
+        cont = document.createElement('div');
+        cont.classList.add('__youtube-timestamps__popup-container');
+        player.appendChild(cont);
     }
-    return container;
+    return cont;
 }
 
-function createTimePopup(timeComment) {
-    function extractRelevantTextPart(text, timestamp) {
-        const timeRegex = /(\d?\d:)?\d?\d:\d\d/g;
-        let match;
+function createTimePopup(tc) {
+    function extract(text, ts) {
+        const regex = /(\d?\d:)?\d?\d:\d\d/g;
         const indices = [];
-        while ((match = timeRegex.exec(text)) !== null) {
-            indices.push({ stamp: match[0], index: match.index });
+        let match;
+        while ((match = regex.exec(text)) !== null) {
+            indices.push({
+                stamp: match[0],
+                index: match.index
+            });
         }
-        
-        const currentIndex = indices.findIndex(item => item.stamp === timestamp);
-        if (currentIndex === -1) return text;
-
-        const start = indices[currentIndex].index;
-        const end = (currentIndex < indices.length - 1) ? indices[currentIndex + 1].index : text.length;
-
-        let relevantText = text.substring(start, end).trim();
-        
-        if (relevantText.startsWith(timestamp)) {
-            relevantText = relevantText.substring(timestamp.length).trim();
+        const currentIdx = indices.findIndex(i => i.stamp === ts);
+        if (currentIdx === -1) {
+            return text;
         }
-
-        if (!relevantText || relevantText.length < 2) {
-            return ""; 
+        const start = indices[currentIdx].index;
+        const end = (currentIdx < indices.length - 1) ? indices[currentIdx + 1].index : text.length;
+        let relevant = text.substring(start, end).trim();
+        if (relevant.startsWith(ts)) {
+            relevant = relevant.substring(ts.length).trim();
         }
-
-        if (relevantText.length > 250) {
-            return relevantText.substring(0, 247) + '...';
+        if (!relevant || relevant.length < 2) {
+            return "";
         }
-
-        return relevantText;
+        return relevant.length > 250 ? `${relevant.substring(0, 247)}...` : relevant;
     }
 
-    const relevantText = extractRelevantTextPart(timeComment.text, timeComment.timestamp);
-    
-    if (!relevantText) {
-        log(`Pominięto tworzenie popupa dla ${timeComment.timestamp} - brak tekstu.`);
+    const text = extract(tc.text, tc.timestamp);
+    if (!text) {
         return null;
     }
 
     const popup = document.createElement('div');
-    popup.classList.add('__youtube-timestamps__time-popup');
-    
+    popup.className = '__youtube-timestamps__time-popup';
+
     const author = document.createElement('div');
-    author.classList.add('__youtube-timestamps__popup-author');
-    
+    author.className = '__youtube-timestamps__popup-author';
+
     const avatar = document.createElement('img');
-    avatar.src = timeComment.authorAvatar;
-    avatar.classList.add('__youtube-timestamps__popup-avatar');
-    
+    avatar.src = tc.authorAvatar;
+    avatar.className = '__youtube-timestamps__popup-avatar';
+
     const name = document.createElement('div');
-    name.textContent = timeComment.authorName;
-    name.classList.add('__youtube-timestamps__popup-name');
-    
-    const text = document.createElement('div');
-    text.classList.add('__youtube-timestamps__popup-text');
-    text.textContent = relevantText;
-    
-    author.appendChild(avatar);
-    author.appendChild(name);
-    popup.appendChild(author);
-    popup.appendChild(text);
-    
-    log(`Utworzono popup dla: ${timeComment.timestamp}`);
+    name.textContent = tc.authorName;
+    name.className = '__youtube-timestamps__popup-name';
+
+    const textEl = document.createElement('div');
+    textEl.className = '__youtube-timestamps__popup-text';
+    textEl.textContent = text;
+
+    author.append(avatar, name);
+    popup.append(author, textEl);
     return popup;
 }
 
-async function manageTimePopups(timeComments) {
-    if (!Array.isArray(timeComments) || timeComments.length === 0) {
-        log('Brak komentarzy z czasem dla popupów');
+function manageTimePopups(timeComments) {
+    const popupCont = getOrCreatePopupContainer();
+    if (!popupCont) {
         return null;
     }
+    const displayed = new Set();
 
-    const popupContainer = getOrCreatePopupContainer();
-    if (!popupContainer) {
-        log('Nie udało się stworzyć kontenera dla popupów');
-        return null;
-    }
-
-    const displayedComments = new Set();
-    
-    const checkTime = () => {
+    const check = () => {
         const video = getVideo();
-        if (!video) return;
-
+        if (!video) {
+            return;
+        }
         const currentTime = Math.floor(video.currentTime);
-        
         timeComments.forEach(tc => {
-            if (tc.time === currentTime && !displayedComments.has(tc.commentId)) {
+            if (tc.time === currentTime && !displayed.has(tc.commentId)) {
                 const popup = createTimePopup(tc);
                 if (popup) {
-                    displayedComments.add(tc.commentId);
+                    displayed.add(tc.commentId);
                     popupQueue.push(popup);
-                    log(`Dodano popup do kolejki dla: ${tc.timestamp}`);
-                    processPopupQueue(popupContainer);
+                    processPopupQueue(popupCont);
                 }
             }
         });
     };
-
-    const intervalId = setInterval(checkTime, POPUP_CHECK_INTERVAL);
-    
-    return function cleanup() {
-        log('Czyszczenie popupów czasu');
-        clearInterval(intervalId);
-        displayedComments.clear();
-        popupQueue = [];
-        if (popupContainer && popupContainer.parentNode) {
-            popupContainer.remove();
-        }
-    };
+    const interval = setInterval(check, POPUP_CHECK_INTERVAL);
+    return () => clearInterval(interval);
 }
 
 function processPopupQueue(container) {
-    if (!container || !(container instanceof Element) || popupQueue.length === 0) {
+    if (!container || popupQueue.length === 0) {
         return;
     }
-    
     while (container.children.length >= MAX_VISIBLE_POPUPS) {
-        const oldestPopup = container.firstChild;
-        if (oldestPopup) {
-            oldestPopup.remove();
-            log('Usunięto najstarszy popup, aby zrobić miejsce');
-        }
+        container.firstChild?.remove();
     }
-    
     const popup = popupQueue.shift();
     if (popup) {
         container.appendChild(popup);
-        
-        requestAnimationFrame(() => {
-            popup.classList.add('popup-visible');
-        });
-        
-        const queueFactor = Math.max(0, popupQueue.length - 2);
-        const displayTime = Math.max(1500, BASE_POPUP_DISPLAY_TIME - queueFactor * 500);
-
+        requestAnimationFrame(() => popup.classList.add('popup-visible'));
+        const displayTime = Math.max(1500, BASE_POPUP_DISPLAY_TIME - Math.max(0, popupQueue.length - 2) * 500);
         setTimeout(() => {
             popup.classList.remove('popup-visible');
-            popup.addEventListener('transitionend', () => {
-                if(popup.parentNode === container) {
-                    popup.remove();
-                    log(`Usunięto popup po czasie`);
-                }
-            }, { once: true });
+            popup.addEventListener('transitionend', () => popup.remove(), {
+                once: true
+            });
         }, displayTime);
     }
 }
