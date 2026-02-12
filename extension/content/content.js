@@ -1,9 +1,10 @@
 // --- ZMIENNE GLOBALNE I USTAWIENIA ---
 let initialized = false;
 let isProcessing = false;
+let currentRunId = 0;
 let currentVideoId = null;
 let contextMenuTimeComment = null;
-let commentsCache = {};
+let hoveredTimeComment = null;
 let settings = {
     timelineMarkers: true,
     commentPopups: true
@@ -38,42 +39,66 @@ onLocationHrefChange(() => {
 
 // --- GŁÓWNE FUNKCJE STERUJĄCE ---
 
+const CACHE_DURATION = 1000 * 60 * 60; // 1 godzina w milisekundach
+
 function main() {
-    if (isProcessing) {
-        log('Już przetwarzam, pomijam.');
-        return;
-    }
     const videoId = getVideoId();
-    if (!videoId || videoId === currentVideoId) {
-        log('Strona nie jest filmem lub jest to ten sam film, pomijam.');
+    if (!videoId) return;
+
+    const myRunId = ++currentRunId;
+    
+    if (videoId === currentVideoId && isProcessing) {
         return;
     }
+    
     isProcessing = true;
     currentVideoId = videoId;
-    log(`Przetwarzanie wideo: ${videoId}`);
+    log(`[RunID: ${myRunId}] Przetwarzanie wideo: ${videoId}`);
 
-    if (commentsCache[videoId]) {
-        log("Znaleziono komentarze w pamięci podręcznej.");
-        addTimeComments(commentsCache[videoId]);
-        isProcessing = false;
-    } else {
-        log("Pobieranie komentarzy z sieci...");
-        fetchTimeComments(videoId)
-            .then(timeComments => {
-                if (videoId !== getVideoId()) {
+    // 1. Sprawdź chrome.storage.local
+    chrome.storage.local.get([videoId], (result) => {
+        // Ponowne sprawdzenie RunID (bo .get jest asynchroniczne)
+        if (myRunId !== currentRunId) return;
+
+        const cachedData = result[videoId];
+        const isFresh = cachedData && (Date.now() - cachedData.timestamp < CACHE_DURATION);
+
+        if (isFresh) {
+            log("Znaleziono świeże dane w pamięci trwałej (storage).");
+            addTimeComments(cachedData.data);
+            isProcessing = false;
+        } else {
+            log("Brak danych w storage lub są przestarzałe. Pobieranie z sieci...");
+            
+            fetchTimeComments(videoId)
+                .then(timeComments => {
+                    if (myRunId !== currentRunId) return;
+                    if (videoId !== getVideoId()) {
+                        isProcessing = false;
+                        return;
+                    }
+
+                    // 2. Zapisz do chrome.storage.local
+                    // Zapisujemy: dane + aktualny czas (żeby wiedzieć kiedy wygasnąć)
+                    chrome.storage.local.set({
+                        [videoId]: {
+                            data: timeComments,
+                            timestamp: Date.now()
+                        }
+                    });
+
+                    log("Komentarze pobrane i zapisane w storage.");
+                    addTimeComments(timeComments);
                     isProcessing = false;
-                    return;
-                }
-                commentsCache[videoId] = timeComments;
-                log("Komentarze zapisane w pamięci podręcznej.");
-                addTimeComments(timeComments);
-                isProcessing = false;
-            })
-            .catch(error => {
-                log(`Błąd w głównym procesie: ${error}`);
-                isProcessing = false;
-            });
-    }
+                })
+                .catch(error => {
+                    if (myRunId === currentRunId) {
+                        log(`Błąd w głównym procesie: ${error}`);
+                        isProcessing = false;
+                    }
+                });
+        }
+    });
 }
 
 function cleanupAndReset(fullReset = false) {
@@ -87,20 +112,53 @@ function cleanupAndReset(fullReset = false) {
     window.__youtube_timestamps_cleanup = null;
     currentVideoId = null;
     isProcessing = false;
-    if (fullReset) {
-        commentsCache = {};
-        log("Pamięć podręczna komentarzy wyczyszczona.");
-    }
 }
 
 // --- FUNKCJE DODAJĄCE ELEMENTY NA STRONIE ---
 
-function addTimeComments(timeComments) {
+function addTimeComments(timeComments, attempt = 1) {
     if (!timeComments || timeComments.length === 0) {
         log('Brak komentarzy z czasem do przetworzenia.');
         return;
     }
-    log(`Przetwarzanie ${timeComments.length} komentarzy.`);
+    
+    const video = getVideo();
+    // Jeśli nie ma video, próbujemy częściej, ale krótko
+    if (!video) {
+        if (attempt < 10) {
+            setTimeout(() => addTimeComments(timeComments, attempt + 1), 200);
+        }
+        return;
+    }
+
+    // --- LOGIKA KOREKCYJNA (SMART RETRY) ---
+    // Nawet jeśli mamy video, YouTube może podawać starą długość przez chwilę.
+    // Planujemy poprawki, żeby upewnić się, że znaczniki są na dobrym miejscu.
+    if (attempt <= 3) {
+        const delay = attempt === 1 ? 500 : 1000; // 500ms za pierwszym razem, potem 1000ms
+        log(`[Attempt ${attempt}] Planuję korektę za ${delay}ms...`);
+        setTimeout(() => {
+            // Sprawdzamy, czy nadal jesteśmy na tym samym filmie przed przerysowaniem
+            if (currentVideoId === getVideoId()) {
+                addTimeComments(timeComments, attempt + 1);
+            }
+        }, delay);
+    }
+    // ---------------------------------------
+
+    const videoDuration = video.duration;
+    // Zabezpieczenie: jeśli duration jest zepsute (NaN lub 0), nie rysujemy teraz, 
+    // ale mechanizm 'attempt' i tak spróbuje ponownie za chwilę.
+    if (Number.isNaN(videoDuration) || videoDuration <= 0) {
+        log('Duration nieznane, czekam na kolejną próbę...');
+        return;
+    }
+
+    // --- RYSOWANIE (Bez zmian logicznych, tylko czyszczenie) ---
+
+    log(`[Attempt ${attempt}] Rysowanie znaczników dla duration: ${videoDuration}`);
+    
+    // Obliczanie heatmapy (bez zmian)
     const timeCounts = {};
     timeComments.forEach(tc => {
         timeCounts[tc.time] = (timeCounts[tc.time] || 0) + 1;
@@ -119,29 +177,39 @@ function addTimeComments(timeComments) {
 
     if (settings.timelineMarkers) {
         const bar = getOrCreateBar();
-        const video = getVideo();
-        if (!video || isNaN(video.duration)) {
-            log('Nie znaleziono elementu wideo lub jego długości.');
-            return;
-        }
-        const videoDuration = video.duration;
-
+        // Czyścimy pasek, żeby przy "korekcie" nie dublować znaczników
+        bar.innerHTML = ''; 
+        
         for (const tc of timeComments) {
             if (tc.time > videoDuration) continue;
+            
             const stamp = document.createElement('div');
             stamp.classList.add('__youtube-timestamps__stamp', getHeatLevel(tc.time));
-            stamp.style.left = `calc(${(tc.time / videoDuration) * 100}% - 2px)`;
+            
+            const positionPercent = (tc.time / videoDuration) * 100;
+            stamp.style.left = `calc(${positionPercent}% - 2px)`;
+            
             bar.appendChild(stamp);
             
-            stamp.addEventListener('mouseenter', () => showPreview(tc));
-            stamp.addEventListener('mouseleave', () => hidePreview());
+            stamp.addEventListener('mouseenter', () => {
+                hoveredTimeComment = tc;
+                showPreview(tc);
+            });
             
+            stamp.addEventListener('mouseleave', () => {
+                hoveredTimeComment = null;
+                hidePreview();
+            });
+            
+            // Wheel event
             stamp.addEventListener('wheel', withWheelThrottle((e) => {
                 const preview = getOrCreatePreview();
                 if (preview) {
                     preview.scrollBy(0, e.deltaY);
                 }
             }));
+            
+            // Context menu
             stamp.addEventListener('contextmenu', e => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -153,25 +221,34 @@ function addTimeComments(timeComments) {
                 }
             });
         }
-        log(`Dodano ${timeComments.length} znaczników na osi czasu.`);
     }
 
-    if (settings.commentPopups) {
+    // Popup manager restartujemy tylko przy pierwszej próbie, 
+    // żeby nie tworzyć wielu interwałów sprawdzających czas.
+    if (attempt === 1 && settings.commentPopups) {
+        // Jeśli istniał stary cleanup, wywołaj go (bezpiecznik)
+        if (typeof window.__youtube_timestamps_cleanup === 'function') {
+            window.__youtube_timestamps_cleanup();
+        }
         const cleanupFunc = manageTimePopups(timeComments);
         window.__youtube_timestamps_cleanup = cleanupFunc;
-        log('Manager popupów zainicjalizowany.');
     }
 }
 
 function getOrCreateBar() {
     let bar = document.querySelector('.__youtube-timestamps__bar');
     if (!bar) {
-        // Używamy oryginalnego, podwójnego selektora
-        let container = document.querySelector('#movie_player .ytp-timed-markers-container, #movie_player .ytp-progress-list');
-        bar = document.createElement('div');
-        bar.classList.add('__youtube-timestamps__bar');
+        // ZMIANA: Szukamy głównego paska postępu, a nie kontenera rozdziałów.
+        // Dzięki temu pasek zawsze ma 100% szerokości filmu.
+        const container = document.querySelector('#movie_player .ytp-progress-bar');
+        
         if (container) {
-            container.appendChild(bar);
+            bar = document.createElement('div');
+            bar.classList.add('__youtube-timestamps__bar');
+            
+            // Wstawiamy jako pierwsze dziecko, żeby było "pod" suwakiem (scrubberem)
+            // ale nad tłem paska.
+            container.insertBefore(bar, container.firstChild);
         }
     }
     return bar;
@@ -185,6 +262,23 @@ document.addEventListener('click', e => {
         hideContextMenu();
     }
 }, true);
+
+// --- OBSŁUGA KLAWISZA ALT (NOWA FUNKCJA) ---
+document.addEventListener('keydown', (e) => {
+    // Sprawdzamy czy wciśnięto lewy lub prawy ALT (key: "Alt")
+    // I czy myszka znajduje się nad jakimś znacznikiem
+    if (e.key === 'Alt' && hoveredTimeComment) {
+        e.preventDefault(); // Zapobiega otwarciu menu przeglądarki
+        
+        // 1. Pauza filmu
+        const video = getVideo();
+        if (video) video.pause();
+
+        // 2. Otwarcie w nowej karcie
+        const link = `https://www.youtube.com/watch?v=${currentVideoId}&lc=${hoveredTimeComment.commentId}`;
+        window.open(link, '_blank');
+    }
+});
 
 document.addEventListener('contextmenu', e => {
     const stamp = e.target.closest('.__youtube-timestamps__stamp');
@@ -251,9 +345,16 @@ function showPreview(timeComment) {
     preview.style.display = '';
     preview.querySelector('.__youtube-timestamps__preview__avatar').src = timeComment.authorAvatar;
     preview.querySelector('.__youtube-timestamps__preview__name').textContent = timeComment.authorName;
+
     const textNode = preview.querySelector('.__youtube-timestamps__preview__text');
     textNode.innerHTML = '';
-    textNode.appendChild(highlightTextFragment(timeComment.text, timeComment.timestamp));
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = '__youtube-timestamps__highlight-time';
+    timeSpan.textContent = `[${timeComment.timestamp}] `;
+    textNode.appendChild(timeSpan);
+
+    textNode.appendChild(document.createTextNode(timeComment.text));
 
     const tooltipBgWidth = tooltip.querySelector('.ytp-tooltip-bg').style.width;
     const previewWidth = tooltipBgWidth.endsWith('px') ? parseFloat(tooltipBgWidth) : 160;
@@ -440,36 +541,12 @@ function getOrCreatePopupContainer() {
 }
 
 function createTimePopup(tc) {
-    function extract(text, ts) {
-        const regex = /(\d?\d:)?\d?\d:\d\d/g;
-        const indices = [];
-        let match;
-        while ((match = regex.exec(text)) !== null) {
-            indices.push({
-                stamp: match[0],
-                index: match.index
-            });
-        }
-        const currentIdx = indices.findIndex(i => i.stamp === ts);
-        if (currentIdx === -1) {
-            return text;
-        }
-        const start = indices[currentIdx].index;
-        const end = (currentIdx < indices.length - 1) ? indices[currentIdx + 1].index : text.length;
-        let relevant = text.substring(start, end).trim();
-        if (relevant.startsWith(ts)) {
-            relevant = relevant.substring(ts.length).trim();
-        }
-        if (!relevant || relevant.length < 2) {
-            return "";
-        }
-        return relevant.length > 250 ? `${relevant.substring(0, 247)}...` : relevant;
-    }
-
-    const text = extract(tc.text, tc.timestamp);
-    if (!text) {
+    if (!tc.text || tc.text.length < 2) {
         return null;
     }
+    
+    // Przycinanie tekstu jeśli za długi
+    const displayText = tc.text.length > 250 ? `${tc.text.substring(0, 247)}...` : tc.text;
 
     const popup = document.createElement('div');
     popup.className = '__youtube-timestamps__time-popup';
@@ -487,7 +564,18 @@ function createTimePopup(tc) {
 
     const textEl = document.createElement('div');
     textEl.className = '__youtube-timestamps__popup-text';
-    textEl.textContent = text;
+    
+    // NOWE: Dodajemy timestamp na początku
+    // Tworzymy span dla czasu
+    const timeSpan = document.createElement('span');
+    timeSpan.className = '__youtube-timestamps__highlight-time';
+    timeSpan.textContent = `[${tc.timestamp}] `; // Dodaj spację po
+    
+    // Tworzymy węzeł tekstu dla reszty
+    const textNode = document.createTextNode(displayText);
+    
+    textEl.appendChild(timeSpan);
+    textEl.appendChild(textNode);
 
     author.append(avatar, name);
     popup.append(author, textEl);
