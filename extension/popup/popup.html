@@ -124,6 +124,30 @@
             color: #666;
         }
 
+        .action-button {
+            width: 100%;
+            margin-bottom: 16px;
+            padding: 10px 12px;
+            border: none;
+            border-radius: 8px;
+            background-color: #4285f4;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s, opacity 0.2s;
+        }
+
+        .action-button:hover:not(:disabled) {
+            background-color: #3367d6;
+        }
+
+        .action-button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+            background-color: #9aa0a6;
+        }
+
         @media (prefers-color-scheme: dark) {
             body {
                 background-color: #292a2d;
@@ -147,6 +171,9 @@
                 border-top-color: rgba(255, 255, 255, 0.1);
                 color: #999;
             }
+            .action-button:disabled {
+                background-color: #5f6368;
+            }
         }
     </style>
 </head>
@@ -155,7 +182,7 @@
         <img src="../icons/icon48.png" alt="YouTube Timestamps">
         <div class="header-text">
             <h1 class="header-title">YouTube Timestamps</h1>
-            <div class="header-version">v1.0.1</div>
+            <div class="header-version"></div>
         </div>
     </div>
 
@@ -177,6 +204,21 @@
         </span>
         <label class="switch">
             <input type="checkbox" id="commentPopups" checked>
+            <span class="slider"></span>
+        </label>
+    </div>
+
+    <button type="button" id="clearCache" class="action-button" disabled>
+        Wyczyść cache tego filmu
+    </button>
+
+    <div class="switch-container">
+        <span class="switch-label">
+            <img class="switch-label-icon" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTE5IDNINUMzLjkgMyAzIDMuOSAzIDV2MTRjMCAxLjEuOSAyIDIgMmgxNGMxLjEgMCAyLS45IDItMnYtMTRjMC0xLjEtLjktMi0yLTJ6bTAgMTZINVY1aDE0djE0em0tOC41LTIwaDJ2NGgtMnptMCA2aDJ2NGgtMnptMCA2aDJ2NGgtMnoiIGZpbGw9ImN1cnJlbnRDb2xvciIvPjwvc3ZnPg==" alt="Debug">
+            Logi debugowania
+        </span>
+        <label class="switch">
+            <input type="checkbox" id="debug">
             <span class="slider"></span>
         </label>
     </div>

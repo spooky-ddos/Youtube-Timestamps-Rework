@@ -3,7 +3,7 @@
 
     "name": "YouTube Timestamps",
     "description": "Shows YouTube timestamps from comments.",
-    "version": "1.0.1",
+    "version": "1.2.0",
 
     "browser_specific_settings": {
         "gecko": {
@@ -38,8 +38,20 @@
         {
             "matches": ["https://www.youtube.com/*", "https://www.youtube-nocookie.com/embed/*"],
             "all_frames": true,
-            "js": ["content/content.js"],
+            "js": [
+                "content/debug.js",
+                "content/cache.js",
+                "content/fetch.js",
+                "content/ui.js",
+                "content/content.js"
+            ],
             "css": ["content/content.css"]
+        },
+        {
+            "matches": ["https://www.youtube.com/*"],
+            "js": ["content/page-bridge.js"],
+            "world": "MAIN",
+            "run_at": "document_start"
         }
     ],
 
