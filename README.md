@@ -1,6 +1,6 @@
 # 🚀 YouTube Timestamps (Rework)
 
-![Wersja](https://img.shields.io/badge/wersja-1.2.1-blue.svg)
+![Wersja](https://img.shields.io/badge/wersja-1.2.8-blue.svg)
 ![Licencja](https://img.shields.io/badge/licencja-Open%20Source-green.svg)
 
 To rozszerzenie przeglądarki, które **ulepsza oglądanie YouTube**, wyświetlając znaczniki czasu z komentarzy bezpośrednio na osi czasu filmu!
@@ -21,6 +21,9 @@ Ta wersja jest ulepszoną i zmodyfikowaną kontynuacją oryginalnego projektu [Y
 * **🧹 Czyszczenie cache z popupu:** Przycisk *Wyczyść cache tego filmu* w ustawieniach wtyczki — dostępny, gdy w aktywnej karcie jest otwarty film YouTube.
 * **🐛 Tryb debugowania:** Opcjonalny switch w popupie włącza logi `[YTT]` w konsoli przeglądarki (przydatne przy diagnozie problemów).
 * **🔌 Naprawione pobieranie komentarzy:** Przejście na InnerTube API w kontekście zalogowanej sesji użytkownika (działa z kontem Google na YouTube).
+* **🔀 Nawigacja SPA / playlisty:** Przełączanie filmów bez F5 — bootstrap tokenu komentarzy przez InnerTube zamiast nieaktualnego `ytInitialData`.
+* **📊 Indicator ładowania:** Kompaktowy badge w lewym górnym rogu playera — pokazuje etapy (cache / pobieranie / rysowanie) z rozróżnieniem źródła danych.
+* **⏸️ Pauza przy ładowaniu (opcjonalnie):** Możliwość automatycznej pauzy na czas pobierania i rysowania znaczników, potem wznowienie odtwarzania.
 
 ---
 
@@ -33,7 +36,7 @@ Ta wersja jest ulepszoną i zmodyfikowaną kontynuacją oryginalnego projektu [Y
 * **Powiadomienia podczas odtwarzania:** Popup z komentarzem w momencie, do którego dotarł film.
 * **Pełna kompatybilność:** Działa w trybie **pełnoekranowym**, **kinowym** oraz na **osadzonych odtwarzaczach**.
 * **Wsparcie dla motywów:** Pełne wsparcie dla **ciemnego motywu** YouTube.
-* **Panel ustawień:** W popupie wtyczki można włączać/wyłączać znaczniki, popupy, debug oraz czyścić cache bieżącego filmu.
+* **Panel ustawień:** W popupie wtyczki można włączać/wyłączać znaczniki, popupy, indicator, pauzę przy ładowaniu, debug oraz czyścić cache bieżącego filmu.
 * **Otwarty kod źródłowy:** Jesteśmy w pełni [Open Source](https://github.com/ris58h/youtube-timestamps)!
 
 > **💡 Wskazówka:** Aby przewinąć długi tekst w podglądzie komentarza, najedź na znacznik czasu na osi i użyj **kółka myszy**.
@@ -46,6 +49,8 @@ Ta wersja jest ulepszoną i zmodyfikowaną kontynuacją oryginalnego projektu [Y
 |-------|------|
 | **Znaczniki na pasku czasu** | Włącza / wyłącza kolorowe znaczniki na osi odtwarzania. |
 | **Powiadomienia o komentarzach** | Włącza / wyłącza popupy podczas odtwarzania. |
+| **Indicator** | Włącza / wyłącza badge postępu ładowania w rogu playera. |
+| **Pauza przy ładowaniu** | Pauzuje film na czas pobierania znaczników i wznawia po zakończeniu. Domyślnie wyłączone. |
 | **Wyczyść cache tego filmu** | Usuwa zapamiętane znaczniki dla filmu w bieżącej karcie i pobiera je ponownie. Nieaktywny poza stroną `watch?v=...`. |
 | **Logi debugowania** | Włącza szczegółowe logi `[YTT]` w konsoli (F12). |
 
@@ -59,6 +64,8 @@ Ta wersja jest ulepszoną i zmodyfikowaną kontynuacją oryginalnego projektu [Y
 4. Kliknij **Załaduj rozpakowane** i wskaż folder `extension`.
 5. Odśwież stronę YouTube z filmem.
 
+> Po każdym **przeładowaniu rozszerzenia** w `chrome://extensions` zrób **F5** na otwartych kartach YouTube.
+
 ---
 
 ## 🛠️ Struktura projektu
@@ -68,10 +75,11 @@ extension/
 ├── background/     # Parser znaczników czasu (logika V6)
 ├── content/
 │   ├── content.js  # Inicjalizacja i orchestracja
+│   ├── extension.js # Bezpieczne wywołania chrome.* (invalidated context)
 │   ├── cache.js    # Cache i sprzątanie storage
 │   ├── fetch.js    # Pobieranie komentarzy (InnerTube API)
-│   ├── ui.js       # Znaczniki, podgląd, popupy
-│   ├── page-bridge.js  # Dostęp do ytInitialData strony
+│   ├── ui.js       # Znaczniki, podgląd, popupy, indicator
+│   ├── page-bridge.js  # Dostęp do ytInitialData / ytcfg (MAIN world)
 │   └── content.css
 └── popup/          # Panel ustawień wtyczki
 ```
@@ -85,6 +93,9 @@ YouTube podaje łączną liczbę komentarzy **i odpowiedzi**. Wtyczka analizuje 
 
 **Znaczniki się nie pojawiają / są nieaktualne?**  
 Otwórz popup wtyczki → *Wyczyść cache tego filmu* → odśwież stronę. W razie problemów włącz *Logi debugowania* i sprawdź konsolę (F12).
+
+**Błąd „Extension context invalidated” po aktualizacji wtyczki?**  
+Przeładuj rozszerzenie w `chrome://extensions`, potem **F5** na karcie YouTube — stary skrypt strony traci połączenie z rozszerzeniem.
 
 **Czy potrzebuję klucza API Google?**  
 Nie. Wtyczka korzysta z publicznego wewnętrznego API YouTube (InnerTube), tak jak sama strona youtube.com.
