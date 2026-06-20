@@ -1,9 +1,32 @@
 const DEFAULT_INNERTUBE_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8";
 const DEFAULT_INNERTUBE_CLIENT_VERSION = "2.20241201.00.00";
 const INNERTUBE_CLIENT_NAME = "WEB";
-const COMMENTS_TOKEN_WAIT_MS = 15000;
-const COMMENTS_TOKEN_POLL_MS = 500;
+const BOOTSTRAP_RETRY_INTERVAL_MS = 2000;
+const MAX_BOOTSTRAP_RETRIES = 3;
 const MAX_COMMENT_PAGES = 500;
+
+function getVideoIdFromInitialData(data) {
+    if (!data) {
+        return null;
+    }
+    return data.currentVideoEndpoint?.watchEndpoint?.videoId
+        ?? data.microformat?.playerMicroformatRenderer?.externalVideoId
+        ?? data.playerResponse?.videoDetails?.videoId
+        ?? null;
+}
+
+function initialDataMatchesVideo(page, videoId) {
+    if (!page || getVideoId() !== videoId) {
+        return false;
+    }
+    if (page.playerVideoId === videoId) {
+        return true;
+    }
+    if (page.videoId === videoId) {
+        return true;
+    }
+    return getVideoIdFromInitialData(page.data) === videoId;
+}
 
 async function fetchTimeComments(videoId) {
     const comments = await fetchRawComments(videoId);
@@ -14,7 +37,7 @@ async function fetchTimeComments(videoId) {
 
 function parseTimeCommentsViaBackground(comments) {
     return new Promise((resolve) => {
-        chrome.runtime.sendMessage({
+        sendExtensionMessage({
             type: 'parseTimeComments',
             comments
         }, (response) => {
@@ -25,62 +48,54 @@ function parseTimeCommentsViaBackground(comments) {
 
 async function fetchRawComments(videoId) {
     try {
-        const page = await waitForCommentsPageData(videoId);
-        if (!page?.data) {
-            yttLog('Brak ytInitialData.');
+        const page = await getYouTubePageData();
+        if (!page?.apiKey) {
+            yttLog('Brak konfiguracji InnerTube (ytcfg).');
             return [];
         }
 
-        let token = commentsContinuationToken(page.data);
-        if (!token) {
+        const resolved = await resolveCommentsToken(videoId, page);
+        if (!resolved?.token) {
             yttLog('Brak tokenu komentarzy.');
             return [];
         }
 
-        const comments = [];
-        const seenIds = new Set();
-        let prevToken;
-        let pageCount = 0;
-
-        while (prevToken !== token && token && pageCount < MAX_COMMENT_PAGES) {
-            try {
-                const commentsResponse = await innertubeNext({ continuation: token }, page);
-                prevToken = token;
-                const pageComments = extractCommentsFromResponse(commentsResponse);
-                for (const comment of pageComments) {
-                    if (!seenIds.has(comment.commentId)) {
-                        seenIds.add(comment.commentId);
-                        comments.push(comment);
-                    }
-                }
-
-                token = findNextContinuationToken(commentsResponse, prevToken);
-                pageCount++;
-
-                if (!token) {
-                    break;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (error) {
-                console.error('[YTT] Błąd podczas pobierania strony z komentarzami:', error);
-                break;
-            }
-        }
-
-        yttLog(`Pobrano ${comments.length} komentarzy głównych z ${pageCount} stron API.`);
-        return comments;
+        return await paginateComments(
+            resolved.token,
+            videoId,
+            resolved.page || page,
+            resolved.bootstrapResponse
+        );
     } catch (error) {
         console.error('[YTT] Nie udało się pobrać komentarzy dla wideo:', videoId, error);
         return [];
     }
 }
 
-async function waitForCommentsPageData(videoId) {
-    const deadline = Date.now() + COMMENTS_TOKEN_WAIT_MS;
+async function resolveCommentsToken(videoId, page) {
+    if (initialDataMatchesVideo(page, videoId) && page.data) {
+        const token = commentsContinuationToken(page.data);
+        if (token) {
+            yttLog('Token komentarzy z ytInitialData.');
+            return { token };
+        }
+    }
+
+    const bootstrapResponse = await bootstrapCommentsViaApi(videoId, page);
+    let token = commentsContinuationToken(bootstrapResponse);
+    if (token) {
+        yttLog('Token komentarzy z InnerTube /next (bootstrap).');
+        return { token, bootstrapResponse };
+    }
+
+    yttLog('Oczekiwanie na dane komentarzy (SPA)...');
     let scrolledToComments = false;
 
-    while (Date.now() < deadline) {
+    for (let attempt = 0; attempt < MAX_BOOTSTRAP_RETRIES; attempt++) {
+        if (getVideoId() !== videoId) {
+            return null;
+        }
+
         if (!scrolledToComments) {
             const commentsSection = document.querySelector('#comments, ytd-comments#comments');
             if (commentsSection) {
@@ -89,19 +104,94 @@ async function waitForCommentsPageData(videoId) {
             }
         }
 
-        const page = await getYouTubePageData();
-        if (page?.data && commentsContinuationToken(page.data)) {
-            return page;
-        }
-        await new Promise(resolve => setTimeout(resolve, COMMENTS_TOKEN_POLL_MS));
+        await new Promise(resolve => setTimeout(resolve, BOOTSTRAP_RETRY_INTERVAL_MS));
+
         if (getVideoId() !== videoId) {
             return null;
         }
+
+        const freshPage = await getYouTubePageData();
+        if (initialDataMatchesVideo(freshPage, videoId) && freshPage?.data) {
+            token = commentsContinuationToken(freshPage.data);
+            if (token) {
+                yttLog('Token komentarzy z ytInitialData (po oczekiwaniu).');
+                return { token, page: freshPage };
+            }
+        }
+
+        const retryResponse = await bootstrapCommentsViaApi(videoId, freshPage || page);
+        token = commentsContinuationToken(retryResponse);
+        if (token) {
+            yttLog('Token komentarzy z InnerTube /next (ponowna próba).');
+            return { token, bootstrapResponse: retryResponse, page: freshPage || page };
+        }
     }
-    return getYouTubePageData();
+
+    return null;
 }
 
-function getYouTubePageData() {
+async function bootstrapCommentsViaApi(videoId, page) {
+    return innertubeNext({
+        videoId,
+        racyCheckOk: true,
+        contentCheckOk: true
+    }, page);
+}
+
+async function paginateComments(initialToken, videoId, page, bootstrapResponse = null) {
+    const comments = [];
+    const seenIds = new Set();
+    let token = initialToken;
+    let prevToken;
+    let pageCount = 0;
+
+    function addPageComments(commentsResponse) {
+        for (const comment of extractCommentsFromResponse(commentsResponse)) {
+            if (!seenIds.has(comment.commentId)) {
+                seenIds.add(comment.commentId);
+                comments.push(comment);
+            }
+        }
+    }
+
+    if (bootstrapResponse) {
+        addPageComments(bootstrapResponse);
+        const nextToken = findNextContinuationToken(bootstrapResponse, token);
+        if (nextToken && nextToken !== token) {
+            token = nextToken;
+        }
+    }
+
+    while (prevToken !== token && token && pageCount < MAX_COMMENT_PAGES) {
+        if (getVideoId() !== videoId) {
+            yttLog('Przerwano pobieranie — użytkownik zmienił film.');
+            return [];
+        }
+
+        try {
+            const commentsResponse = await innertubeNext({ continuation: token }, page);
+            prevToken = token;
+            addPageComments(commentsResponse);
+
+            token = findNextContinuationToken(commentsResponse, prevToken);
+            pageCount++;
+
+            if (!token) {
+                break;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (error) {
+            console.error('[YTT] Błąd podczas pobierania strony z komentarzami:', error);
+            break;
+        }
+    }
+
+    yttLog(`Pobrano ${comments.length} komentarzy głównych z ${pageCount} stron API.`);
+    return comments;
+}
+
+function getYouTubePageData(timeoutMs = 250) {
     return new Promise((resolve) => {
         function onPageData(event) {
             document.removeEventListener('ytt-page-data', onPageData);
@@ -114,7 +204,7 @@ function getYouTubePageData() {
         setTimeout(() => {
             document.removeEventListener('ytt-page-data', onPageData);
             resolve(null);
-        }, 3000);
+        }, timeoutMs);
     });
 }
 

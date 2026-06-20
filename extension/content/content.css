@@ -123,6 +123,62 @@
     width: 320px;
 }
 
+.__youtube-timestamps__status {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 2147483647;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #eee;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.3;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 0.6s ease;
+    backdrop-filter: blur(4px);
+}
+
+.__youtube-timestamps__status.ytt-status-fade-out {
+    opacity: 0;
+}
+
+.__youtube-timestamps__status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #3ea6ff;
+    flex-shrink: 0;
+}
+
+.__youtube-timestamps__status[data-stage="done"] .__youtube-timestamps__status-dot {
+    background: #4caf50;
+    animation: none;
+}
+
+.__youtube-timestamps__status[data-stage="checking"] .__youtube-timestamps__status-dot,
+.__youtube-timestamps__status[data-stage="cache-hit"] .__youtube-timestamps__status-dot,
+.__youtube-timestamps__status[data-stage="fetching"] .__youtube-timestamps__status-dot,
+.__youtube-timestamps__status[data-stage="drawing"] .__youtube-timestamps__status-dot {
+    animation: ytt-status-pulse 1s ease-in-out infinite;
+}
+
+@keyframes ytt-status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.ytp-fullscreen .__youtube-timestamps__status {
+    top: 16px;
+    left: 16px;
+}
+
 .__youtube-timestamps__time-popup {
     background-color: rgba(28, 28, 28, 0.9);
     color: white;

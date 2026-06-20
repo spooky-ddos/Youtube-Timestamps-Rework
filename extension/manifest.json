@@ -3,7 +3,7 @@
 
     "name": "YouTube Timestamps",
     "description": "Shows YouTube timestamps from comments.",
-    "version": "1.2.1",
+    "version": "1.2.8",
 
     "browser_specific_settings": {
         "gecko": {
@@ -40,6 +40,7 @@
             "all_frames": true,
             "js": [
                 "content/debug.js",
+                "content/extension.js",
                 "content/cache.js",
                 "content/fetch.js",
                 "content/ui.js",

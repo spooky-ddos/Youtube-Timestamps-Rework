@@ -1,6 +1,8 @@
 document.addEventListener('DOMContentLoaded', async () => {
     const timelineMarkersCheckbox = document.getElementById('timelineMarkers');
     const commentPopupsCheckbox = document.getElementById('commentPopups');
+    const statusIndicatorCheckbox = document.getElementById('statusIndicator');
+    const pauseWhileLoadingCheckbox = document.getElementById('pauseWhileLoading');
     const debugCheckbox = document.getElementById('debug');
     const clearCacheButton = document.getElementById('clearCache');
     const versionEl = document.querySelector('.header-version');
@@ -10,11 +12,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     const settings = await chrome.storage.sync.get({
         timelineMarkers: true,
         commentPopups: true,
+        statusIndicator: true,
+        pauseWhileLoading: false,
         debug: false
     });
 
     timelineMarkersCheckbox.checked = settings.timelineMarkers;
     commentPopupsCheckbox.checked = settings.commentPopups;
+    statusIndicatorCheckbox.checked = settings.statusIndicator;
+    pauseWhileLoadingCheckbox.checked = settings.pauseWhileLoading;
     debugCheckbox.checked = settings.debug;
 
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -48,6 +54,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     commentPopupsCheckbox.addEventListener('change', async () => {
         await saveSettingAndNotify(activeTab, {
             commentPopups: commentPopupsCheckbox.checked
+        });
+    });
+
+    statusIndicatorCheckbox.addEventListener('change', async () => {
+        await saveSettingAndNotify(activeTab, {
+            statusIndicator: statusIndicatorCheckbox.checked
+        });
+    });
+
+    pauseWhileLoadingCheckbox.addEventListener('change', async () => {
+        await saveSettingAndNotify(activeTab, {
+            pauseWhileLoading: pauseWhileLoadingCheckbox.checked
         });
     });
 

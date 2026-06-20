@@ -4,12 +4,12 @@ const CLEANUP_INTERVAL = 1000 * 60 * 60 * 24;
 const CLEANUP_KEY = '__ytt_last_cleanup__';
 
 function maybeCleanupCache() {
-    chrome.storage.local.get([CLEANUP_KEY], (meta) => {
+    storageLocalGet([CLEANUP_KEY], (meta) => {
         const lastCleanup = meta[CLEANUP_KEY] || 0;
         if (Date.now() - lastCleanup < CLEANUP_INTERVAL) {
             return;
         }
-        chrome.storage.local.get(null, (all) => {
+        storageLocalGet(null, (all) => {
             const now = Date.now();
             const keysToRemove = [];
             for (const key in all) {
@@ -19,9 +19,9 @@ function maybeCleanupCache() {
                     keysToRemove.push(key);
                 }
             }
-            const finalize = () => chrome.storage.local.set({ [CLEANUP_KEY]: now });
+            const finalize = () => storageLocalSet({ [CLEANUP_KEY]: now });
             if (keysToRemove.length > 0) {
-                chrome.storage.local.remove(keysToRemove, () => {
+                storageLocalRemove(keysToRemove, () => {
                     yttLog(`Sprzątanie cache: usunięto ${keysToRemove.length} starych wpisów.`);
                     finalize();
                 });
@@ -33,7 +33,7 @@ function maybeCleanupCache() {
 }
 
 function saveVideoCache(videoId, timeComments) {
-    chrome.storage.local.set({
+    storageLocalSet({
         [videoId]: {
             data: timeComments,
             timestamp: Date.now()
@@ -42,5 +42,5 @@ function saveVideoCache(videoId, timeComments) {
 }
 
 function loadVideoCache(videoId, callback) {
-    chrome.storage.local.get([videoId], (result) => callback(result[videoId]));
+    storageLocalGet([videoId], (result) => callback(result[videoId]));
 }
