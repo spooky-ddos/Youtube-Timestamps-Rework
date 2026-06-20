@@ -4,6 +4,7 @@ const BASE_POPUP_DISPLAY_TIME = 5000;
 const POPUP_CHECK_INTERVAL = 500;
 const MAX_VISIBLE_POPUPS = 5;
 let popupQueue = [];
+let popupManagerStarted = false;
 
 function addTimeComments(timeComments, attempt = 1) {
     if (!timeComments?.length) {
@@ -96,11 +97,12 @@ function addTimeComments(timeComments, attempt = 1) {
         }
     }
 
-    if (attempt === 1 && settings.commentPopups) {
+    if (settings.commentPopups && !popupManagerStarted) {
         if (typeof window.__youtube_timestamps_cleanup === 'function') {
             window.__youtube_timestamps_cleanup();
         }
         window.__youtube_timestamps_cleanup = manageTimePopups(timeComments);
+        popupManagerStarted = true;
     }
 }
 
@@ -108,6 +110,7 @@ function cleanupUi() {
     document.querySelector('.__youtube-timestamps__bar')?.remove();
     document.querySelector('.__youtube-timestamps__popup-container')?.remove();
     popupQueue = [];
+    popupManagerStarted = false;
     if (typeof window.__youtube_timestamps_cleanup === 'function') {
         window.__youtube_timestamps_cleanup();
     }
@@ -302,7 +305,7 @@ function getOrCreatePopupContainer() {
         const player = document.querySelector('#movie_player');
         if (!player) return null;
         cont = document.createElement('div');
-        cont.classList.add('.__youtube-timestamps__popup-container');
+        cont.classList.add('__youtube-timestamps__popup-container');
         player.appendChild(cont);
     }
     return cont;
@@ -357,10 +360,11 @@ function manageTimePopups(timeComments) {
         }
         const currentTime = Math.floor(video.currentTime);
         timeComments.forEach(tc => {
-            if (tc.time === currentTime && !displayed.has(tc.commentId)) {
+            const popupKey = `${tc.commentId}:${tc.time}`;
+            if (tc.time === currentTime && !displayed.has(popupKey)) {
                 const popup = createTimePopup(tc);
                 if (popup) {
-                    displayed.add(tc.commentId);
+                    displayed.add(popupKey);
                     popupQueue.push(popup);
                     processPopupQueue(popupCont);
                 }
